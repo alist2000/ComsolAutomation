@@ -68,7 +68,7 @@ def generate_dummy_atlases(num_atlases=2):
 
 
 # ==============================================================================
-# 1. TEMPLATE GENERATION (Steps 1-8 performed once)
+# 1. TEMPLATE GENERATION (Steps 1-5 performed once)
 # ==============================================================================
 
 def create_comsol_template(filename=TEMPLATE_FILE):
@@ -154,7 +154,7 @@ def create_comsol_template(filename=TEMPLATE_FILE):
 
 
 # ==============================================================================
-# 2. AUTOMATED SWEEP (Step 9)
+# 2. AUTOMATED SWEEP (Step 6)
 # ==============================================================================
 
 def run_parametric_sweep():
