@@ -36,7 +36,7 @@ N_EIGENVALUES = 10  # Number of eigenfrequencies to compute
 
 # --- Sweep Configuration ---
 # Define the wave vectors (q_x, q_y) in [0, 1] to sweep over.
-K_VECTORS_Q = [
+K_VECTORS = [
     (0.0, 0.0),
     (0.25, 0.0),
     (0.5, 0.0),
@@ -208,7 +208,7 @@ def run_parametric_sweep():
         model.material("Concrete").selection().named("geom1_sel_concrete")
 
         # Inner loop for k-vectors
-        for qx, qy in K_VECTORS_Q:
+        for qx, qy in K_VECTORS:
             print(f"  Running k-vector: (qx={qx:.2f}, qy={qy:.2f})...")
 
             # 3. UPDATE PARAMETERS (kx, ky)
