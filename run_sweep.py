@@ -120,10 +120,14 @@ def create_comsol_template(filename=TEMPLATE_FILE):
     print("Step 3: Setting up Physics and Boundary Conditions...")
     model.java.component("comp1").physics().create("solid", "SolidMechanics", "geom1")
 
-    # --- DEFINITIVE FIX ---
-    # Get the physics object and use .setProperty() to set the AnalysisType.
+    # Configure the analysis type for the Solid Mechanics interface.
+    # The mph library exposes a generic ``Node.property`` helper for
+    # setting properties on COMSOL feature objects.  The previous
+    # ``setProperty`` call raised an ``AttributeError`` because the
+    # underlying Java class does not implement that method.  Using the
+    # ``property`` helper ensures compatibility across COMSOL versions.
     solid_java = model.java.component("comp1").physics("solid")
-    solid_java.setProperty("AnalysisType", "planeStrain")
+    solid_java.property("AnalysisType", "planeStrain")
 
     pbc = solid_java.create('pbc1', 'PeriodicCondition', 1)
     pbc.selection().allb()
