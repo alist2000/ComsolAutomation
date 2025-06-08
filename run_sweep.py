@@ -132,9 +132,9 @@ def create_comsol_template(filename=TEMPLATE_FILE):
 
     print("Step 4: Creating Mesh...")
     model.java.component("comp1").mesh().create("mesh1")
-    mesh = model.mesh("mesh1")
-    mesh.create("map1", "Mapped")
-    mesh.feature("map1").property("ndiv", [str(NX), str(NY)])
+    mesh_java = model.java.component("comp1").mesh("mesh1")
+    mesh_java.create("map1", "Mapped")
+    mesh_java.feature("map1").property("ndiv", [str(NX), str(NY)])
 
     print("Step 5: Creating Study...")
     model.java.study().create("eig")
