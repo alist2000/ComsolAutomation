@@ -6,12 +6,12 @@
 
 ## 1· Editions at a glance
 
-| Ver.   | Python file                           | Headline capability                                                                                                            | k‑sweepstrategy                                                  | DB schema                                                                                             | COMSOL runs                                       |
-| -------- | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| **v1** | `6_result_grid.py`                    | **Baseline**: random 28×28 material map, hard‑coded Floquet PBC node lists, logs every run to SQLite                             | Single point (Γ→X end‑pointkx=π/a,ky=0)                      | `simulations`+ `eigenfrequencies`(tables w/o mesh stats)                                              | Builds & solves **once per run**                    |
-| **v2** | `6_result_grid_final_octant_fixed.py` | **Octant‑symmetry** generator, meshstatistics logging, PBC selections recorded                                                 | Single point (π/a,0)                                              | Adds`mesh_num_elements`+ `mesh_min_quality`, stores PBC node lists as JSON                           | One run per script                                 |
-| **v3** | `grid_model.py—v3`                  | **Parametric k‑sweep** over triangular Γ–X grid, robust DB logging, separate `.mph` per(kx,ky)                                | External Python loop; spins up a new COMSOL session **per k‑point** | `simulations` row per *k*; `eigenfrequencies` unchanged                                                 | *N* sessions (slow but simple)                      |
-| **v4** | `grid_model.py`(current)             | **Manual in‑memory sweep** –builds the model **once**, loops through k‑grid by only updating parameters; writes a single `.mph` | Internal loop inside one COMSOL session (fast)                      | Normalised schema: one `simulations` row per sweep; `eigenfrequencies` gains explicit `kx`,`ky` columns | **1** COMSOL solve sequence reused for *N* k‑points |
+| Ver.   | Python file | Headline capability                                                                                                            | k‑sweepstrategy                                                  | DB schema                                                                                             | COMSOL runs                                       |
+| -------- |-------------| -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| **v1** | `grid_model.py-v1`    | **Baseline**: random 28×28 material map, hard‑coded Floquet PBC node lists, logs every run to SQLite                             | Single point (Γ→X end‑pointkx=π/a,ky=0)                      | `simulations`+ `eigenfrequencies`(tables w/o mesh stats)                                              | Builds & solves **once per run**                    |
+| **v2** | `grid_model.py-v2` | **Octant‑symmetry** generator, meshstatistics logging, PBC selections recorded                                                 | Single point (π/a,0)                                              | Adds`mesh_num_elements`+ `mesh_min_quality`, stores PBC node lists as JSON                           | One run per script                                 |
+| **v3** | `grid_model.py—v3` | **Parametric k‑sweep** over triangular Γ–X grid, robust DB logging, separate `.mph` per(kx,ky)                                | External Python loop; spins up a new COMSOL session **per k‑point** | `simulations` row per *k*; `eigenfrequencies` unchanged                                                 | *N* sessions (slow but simple)                      |
+| **v4** | `grid_model.py`(current) | **Manual in‑memory sweep** –builds the model **once**, loops through k‑grid by only updating parameters; writes a single `.mph` | Internal loop inside one COMSOL session (fast)                      | Normalised schema: one `simulations` row per sweep; `eigenfrequencies` gains explicit `kx`,`ky` columns | **1** COMSOL solve sequence reused for *N* k‑points |
 
 > **Tip:** choose **v4** for production sweeps; keep **v3** around when debugging individual k‑points or COMSOL memory‑leak issues.
 
@@ -29,7 +29,7 @@
 4. **Run the script**\`\`\`bash
    python grid\_model.py       # or the file of the edition you need
 
-```
+
 5. **Post‑process**
    * `.mph` file → inspect modes visually in COMSOL Desktop if desired.
    * `results/simulation_results.db` → query with SQLiteor Pandas; each eigen‑row already tagged with its k‑vector.
@@ -58,6 +58,7 @@
 * **Number of modes**– set `N_MODES` (v4) or `num_eigenvalues` in earlier scripts.
 
 ---
+
 ## 5. Usage
 
 1.  Place the script in your project directory.
@@ -69,6 +70,7 @@
 
 The script will create a `results/` directory, where it will save the database and the final `.mph` model file.
 
+---
 
 ## 6· Troubleshooting cheatsheet
 
@@ -82,4 +84,4 @@ The script will create a `results/` directory, where it will save the database a
 
 ©2025— Phononic Crystalautomation demo.Licensed under MIT.
 
-```
+
