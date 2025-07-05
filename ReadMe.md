@@ -1,74 +1,64 @@
+# COMSOL 2D Phononic CrystalAnalyzer
 
-# COMSOL 2D Phononic Crystal Analyzer
+*A family of Pythonscripts – written with the `mph` LiveLink – for high‑throughput eigen‑analysis of a $28\times28$ pixel 2‑D phononic crystal unit cell.* Each edition adds new automation features; all store inputs+results in SQLite for reproducibility and downstream PINN training.
 
-This script automates the process of analyzing a 2D phononic crystal using COMSOL Multiphysics. It programmatically builds a model of a unit cell, applies Floquet periodic boundary conditions, and calculates the eigenfrequency band structure by sweeping through various wave vectors (**k-points**) in the first Brillouin zone.
+---
 
-The primary goal is to efficiently calculate the dispersion relation for a given material configuration without requiring manual operation of the COMSOL graphical user interface. All parameters and results are systematically stored in an SQLite database for robust data management and post-processing.
+## 1· Editions at a glance
 
-## Features
+| Ver.   | Python file                           | Headline capability                                                                                                            | k‑sweepstrategy                                                  | DB schema                                                                                             | COMSOL runs                                       |
+| -------- | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| **v1** | `6_result_grid.py`                    | **Baseline**: random 28×28 material map, hard‑coded Floquet PBC node lists, logs every run to SQLite                             | Single point (Γ→X end‑pointkx=π/a,ky=0)                      | `simulations`+ `eigenfrequencies`(tables w/o mesh stats)                                              | Builds & solves **once per run**                    |
+| **v2** | `6_result_grid_final_octant_fixed.py` | **Octant‑symmetry** generator, meshstatistics logging, PBC selections recorded                                                 | Single point (π/a,0)                                              | Adds`mesh_num_elements`+ `mesh_min_quality`, stores PBC node lists as JSON                           | One run per script                                 |
+| **v3** | `grid_model.py—v3`                  | **Parametric k‑sweep** over triangular Γ–X grid, robust DB logging, separate `.mph` per(kx,ky)                                | External Python loop; spins up a new COMSOL session **per k‑point** | `simulations` row per *k*; `eigenfrequencies` unchanged                                                 | *N* sessions (slow but simple)                      |
+| **v4** | `grid_model.py`(current)             | **Manual in‑memory sweep** –builds the model **once**, loops through k‑grid by only updating parameters; writes a single `.mph` | Internal loop inside one COMSOL session (fast)                      | Normalised schema: one `simulations` row per sweep; `eigenfrequencies` gains explicit `kx`,`ky` columns | **1** COMSOL solve sequence reused for *N* k‑points |
 
-  - **Automated Model Generation**: Creates a complete 2D COMSOL model from scratch, including geometry, materials, physics, and meshing.
-  - **Random Material Distribution**: Generates a 28x28 grid and assigns two different materials (Soil and Concrete) based on a randomly generated but symmetric pattern.
-  - **Efficient "Manual Sweep"**: Builds the complex model and mesh only once, then programmatically loops through k-points, updating parameters and re-solving for maximum efficiency.
-  - **Data Persistence**: Logs all simulation parameters and the resulting eigenfrequencies for every k-point into a structured SQLite database.
-  - **Reproducibility**: Saves the final COMSOL model file (`.mph`) and a database stamped with a unique random seed for each complete run.
+> **Tip:** choose **v4** for production sweeps; keep **v3** around when debugging individual k‑points or COMSOL memory‑leak issues.
 
------
+---
 
-## How It Works
+## 2· Common workflow
 
-The script executes a series of automated steps to perform the analysis.
+1. **Pick a version**
 
-### 1\. Initialization and Configuration
+   * `v1`/`v2`for quick single‑point tests or teaching examples.
+   * `v3` if you need completelystateless, crash‑resilient sweeps on a cluster.
+   * `v4` for the fastest laptop/desktop band‑diagram runs.
+2. **Install requirements** `pip install mph numpy`
+3. **Launch COMSOLserver** or rely on`mph.start()` to spawn a stand‑alone client.
+4. **Run the script**\`\`\`bash
+   python grid\_model.py       # or the file of the edition you need
 
-  - **Constants**: Defines global constants for the simulation, such as the lattice constant (`A`), grid size (`GRID_SIZE`), and the number of k-points to sample (`N_K`).
-  - **Database Setup**: Prepares an SQLite database file (`results/simulation_results.db`) with two tables:
-      - `simulations`: Stores a record for each complete sweep, identified by a unique `random_seed`.
-      - `eigenfrequencies`: Stores the calculated eigenfrequencies for every mode at each specific (kx, ky) point.
+```
+5. **Post‑process**
+   * `.mph` file → inspect modes visually in COMSOL Desktop if desired.
+   * `results/simulation_results.db` → query with SQLiteor Pandas; each eigen‑row already tagged with its k‑vector.
 
-### 2\. Model Construction (Single Execution)
+---
 
-The core of the script's efficiency comes from building the model only one time per run.
+## 3· Feature matrix
 
-  - **COMSOL Connection**: It starts a single COMSOL client session using the `mph` library.
-  - **Geometry**: A 2D geometry is created, consisting of a 28x28 grid of individual square domains. This grid represents the pixels of the material unit cell.
-  - **Materials**: A random, symmetric material map is generated. The script then assigns "Soil" and "Concrete" properties to the corresponding domains (pixels) based on this map.
-  - **Physics**: A "Solid Mechanics" physics interface is added. Floquet periodic boundary conditions are applied to the outer edges of the grid using pre-calculated boundary index lists to simulate an infinite periodic lattice.
-  - **Meshing**: A physics-controlled, free triangular mesh is generated over the entire geometry.
+| Capability |v1 |v2 |v3 |v4 |
+|------------|:--:|:--:|:--:|:--:|
+| Random **octant‑symmetric** material map |✖|✔|✔|✔|
+| Floquet PBC hard‑coded node lists |✔|✔|✔|✔|
+| Mesh quality & element count logged |✖|✔|✔|(irrelevant– single mesh) |
+| Parametric k‑sweep |✖|✖|✔|✔|
+| Single COMSOL build reused |✖|✖|✖|✔|
+| One `.mph` file per sweep |✖|✖|✔|✖|
+| SQLite schema normalised (`kx`,`ky` columns) |✖|✖|✖|✔|
 
-### 3\. Manual k-Point Sweep (Python Loop)
+---
 
-After the model is built, the script begins the "manual sweep" to calculate the band structure.
+## 4· Customisation hooks
 
-  - **Generate k-Grid**: A triangular grid of (kx, ky) points is generated within the first Brillouin zone.
-  - **Iterate and Solve**: The script loops through each (kx, ky) pair. In each iteration, it:
-    1.  Updates the `kx` and `ky` global parameters within the existing COMSOL model.
-    2.  Runs the pre-defined "Eigenfrequency" study to solve for the first 10 modes.
-    3.  Evaluates and retrieves the list of resulting eigenfrequencies.
-    4.  Logs the frequencies, along with the corresponding `kx` and `ky`, to the `eigenfrequencies` table in the database.
+* **Grid resolution**– change `GRID_SIZE`; regenerate PBC lists in `_outer_bnd_lists()`.
+* **k‑grid density**– tweak `N_K` (v3/v4).
+* **Material parameters**– edit `SOIL_PROPS` / `CONCRETE_PROPS` dictionaries.
+* **Number of modes**– set `N_MODES` (v4) or `num_eigenvalues` in earlier scripts.
 
-### 4\. Finalization
-
-  - After the loop completes, the final state of the COMSOL model (containing the solution for the last k-point) is saved to a `.mph` file in the `results/` directory.
-  - The connection to the COMSOL client is closed.
-
------
-
-## Prerequisites
-
-To run this script, you will need:
-
-  - A working installation of **COMSOL Multiphysics®** (with a valid license).
-  - **COMSOL LiveLink™ for Python**.
-  - **Python 3.x**.
-  - The **`mph`** and **`numpy`** Python libraries. You can install them using pip:
-    ```bash
-    pip install mph numpy
-    ```
-
------
-
-## Usage
+---
+## 5. Usage
 
 1.  Place the script in your project directory.
 2.  Ensure COMSOL is correctly installed and accessible from your system's command line environment.
@@ -79,11 +69,17 @@ To run this script, you will need:
 
 The script will create a `results/` directory, where it will save the database and the final `.mph` model file.
 
-## Customization
 
-You can easily modify the script's behavior by changing the global constants at the top of the file:
+## 6· Troubleshooting cheatsheet
 
-  - `GRID_SIZE`: To change the resolution of the unit cell. **Note**: If you change this from `28`, you must regenerate the hardcoded boundary lists in the `_outer_bnd_lists` function, as they are specific to a 28x28 grid.
-  - `N_K`: To increase or decrease the density of the k-point sweep.
-  - `N_MODES`: To change the number of eigenfrequencies calculated.
-  - `SOIL_PROPS`, `CONCRETE_PROPS`: To change the physical properties of the materials.
+| Symptom | Likely cause | Fix |
+|---------|--------------|------|
+| COMSOL exits after first k‑point (v3) | server started without `-multion` | Restart server: `comsol mphserver -multi on -port2036` |
+| `ValueError` about boundary lists after changing `GRID_SIZE` | Hard‑coded lists only valid for 28×28 | Re‑generate lists or derive them programmatically |
+| Out‑of‑memory for large sweeps | v3 spawns many COMSOL instances | Use v4 (single process) or batch k‑points |
+
+---
+
+©2025— Phononic Crystalautomation demo.Licensed under MIT.
+
+```
