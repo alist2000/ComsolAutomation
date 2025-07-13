@@ -20,12 +20,12 @@ N_EIG: int = 10
 N_SEEDS: int = 2
 
 # --- Updated output paths ---
-OUTPUT_DIR = Path("results_v5.3")
+OUTPUT_DIR = Path("results_v5.4")
 OUTPUT_DIR.mkdir(exist_ok=True)
 # Create a dedicated directory for the exported text files
 EXPORT_DATA_DIR = OUTPUT_DIR / "displacement_data"
 EXPORT_DATA_DIR.mkdir(exist_ok=True)
-DB_PATH = OUTPUT_DIR / "simulation_results_v5.3.db"
+DB_PATH = OUTPUT_DIR / "simulation_results_v5.4.db"
 
 # --- Material properties ---
 MATERIALS = {
@@ -130,9 +130,68 @@ def _outer_bnd_lists(size: int) -> Tuple[List[int], List[int]]:
     raise ValueError(f"Boundary lists not calibrated for GRID_SIZE = {size}.")
 
 
-# ── Worker function (UPDATED) ─────────────────────────────────────
+import pandas as pd
+import os
 
-# ── Worker function (UPDATED) ─────────────────────────────────────
+
+def _convert_txt_to_npz(txt_path: Path):
+    """
+    Reads a COMSOL-exported displacement text file, processes it into
+    structured NumPy arrays, and saves it as a compressed .npz file.
+    The original .txt file is deleted after successful conversion.
+
+    Args:
+        txt_path (Path): The path to the input .txt file.
+    """
+    if not txt_path.exists():
+        logging.error(f"Cannot convert non-existent file: {txt_path}")
+        return
+
+    column_names = ['x', 'y']
+    for i in range(1, N_EIG + 1):
+        column_names.append(f'u_mode_{i}')
+        column_names.append(f'v_mode_{i}')
+
+    # ★★★ FIX 1: Use a raw string for the separator to fix SyntaxWarning ★★★
+    df = pd.read_csv(
+        txt_path,
+        comment='%',
+        sep=r'\s+',  # Use raw string r'...' for regex
+        header=None,
+        names=column_names
+    )
+
+    coords = df[['x', 'y']].to_numpy(dtype=np.float32)
+
+    num_points = coords.shape[0]
+    displacements = np.empty((num_points, N_EIG, 2), dtype=np.complex64)
+
+    for i in range(N_EIG):
+        mode_num = i + 1
+        u_col_name = f'u_mode_{mode_num}'
+        v_col_name = f'v_mode_{mode_num}'
+
+        # ★★★ FIX 2: Convert column to string type BEFORE applying replace ★★★
+        # This handles cases where pandas infers a float/int dtype.
+        u_complex = df[u_col_name].astype(str).apply(lambda val: complex(val.replace('i', 'j'))).to_numpy()
+        v_complex = df[v_col_name].astype(str).apply(lambda val: complex(val.replace('i', 'j'))).to_numpy()
+
+        displacements[:, i, 0] = u_complex
+        displacements[:, i, 1] = v_complex
+
+    # Save to a compressed .npz file
+    npz_path = txt_path.with_suffix('.npz')
+    np.savez_compressed(
+        npz_path,
+        coordinates=coords,
+        displacements=displacements
+    )
+    logging.info(f"Successfully converted {txt_path.name} to {npz_path.name}")
+
+    # Clean up the original .txt file
+    os.remove(txt_path)
+    return npz_path
+
 
 # ── Worker function (UPDATED) ─────────────────────────────────────
 
@@ -218,40 +277,45 @@ def _build_and_solve(seed: int):
 
             freqs = [float(np.real(v)) for v in model.evaluate("freq")]
 
-            # 🚨 FIX: Create a temporary, fresh dataset AND export node for this specific solution.
+            # Create the export node as before
             cpt_tag_temp = "temp_cpt_export"
             export_tag_temp = "temp_data_export"
 
-            # Remove the nodes if they exist from a previous iteration to be safe
+            # (Safety removal of nodes can remain)
             try:
                 model.java.result().dataset().remove(cpt_tag_temp)
                 model.java.result().export().remove(export_tag_temp)
             except Exception:
-                pass  # It's okay if they don't exist
+                pass
 
-            # Create the dataset
             cpt_node = model.java.result().dataset().create(cpt_tag_temp, "CutPoint2D")
             cpt_node.set("method", "grid")
             cpt_node.set("gridx", f"range(-a/2,a/{GRID_SIZE - 1},a/2)")
             cpt_node.set("gridy", f"range(-a/2,a/{GRID_SIZE - 1},a/2)")
             cpt_node.run()
 
-            # Create the export node
             export_node = model.java.result().export().create(export_tag_temp, "Data")
             export_node.set("data", cpt_tag_temp)
-            export_node.setIndex("expr", "u", 0)
-            export_node.setIndex("expr", "v", 1)
+            export_node.setIndex("expr", "u", 0)  # This exports all 10 modes of u
+            export_node.setIndex("expr", "v", 1)  # This exports all 10 modes of v
 
-            displacement_filename = f"atlas_{seed}_kx_{kx:.4f}_ky_{ky:.4f}.txt"
-            displacement_filepath = EXPORT_DATA_DIR / displacement_filename
-            safe_filepath_str = str(displacement_filepath.resolve()).replace('\\', '\\\\')
+            # ★★★ CHANGED SECTION START ★★★
+            # Define temp .txt filename, which will be converted and deleted
+            txt_filename = f"atlas_{seed}_kx_{kx:.4f}_ky_{ky:.4f}.txt"
+            txt_filepath = EXPORT_DATA_DIR / txt_filename
+            safe_filepath_str = str(txt_filepath.resolve()).replace('\\', '\\\\')
 
             export_node.set("filename", safe_filepath_str)
             export_node.run()
             logging.info(
-                f"Seed {seed}, k=({kx:.2f},{ky:.2f}) - Successfully exported displacements to {displacement_filename}")
+                f"Seed {seed}, k=({kx:.2f},{ky:.2f}) - Exported temp displacements to {txt_filename}")
 
-            _log_freqs_and_displacements(DB_PATH, run_id, kx, ky, freqs, str(displacement_filepath))
+            # Convert the exported .txt file to a compressed .npz file
+            npz_filepath = _convert_txt_to_npz(txt_filepath)
+
+            # Log the final .npz path to the database
+            _log_freqs_and_displacements(DB_PATH, run_id, kx, ky, freqs, str(npz_filepath))
+            # ★★★ CHANGED SECTION END ★★★
 
         logging.info("Seed %d finished", seed)
 
@@ -260,6 +324,8 @@ def _build_and_solve(seed: int):
     finally:
         if client:
             client.clear()
+
+
 # ── Main entry point ───────────────────────────────────────────────
 
 if __name__ == "__main__":
