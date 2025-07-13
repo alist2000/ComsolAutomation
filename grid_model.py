@@ -20,12 +20,12 @@ N_EIG: int = 10
 N_SEEDS: int = 2
 
 # --- Updated output paths ---
-OUTPUT_DIR = Path("results_v5.4")
+OUTPUT_DIR = Path("results_v5.5")
 OUTPUT_DIR.mkdir(exist_ok=True)
 # Create a dedicated directory for the exported text files
 EXPORT_DATA_DIR = OUTPUT_DIR / "displacement_data"
 EXPORT_DATA_DIR.mkdir(exist_ok=True)
-DB_PATH = OUTPUT_DIR / "simulation_results_v5.4.db"
+DB_PATH = OUTPUT_DIR / "simulation_results_v5.5.db"
 
 # --- Material properties ---
 MATERIALS = {
@@ -202,7 +202,7 @@ def _build_and_solve(seed: int):
         model = client.create(f"GridModel_seed{seed}")
         logging.info("Seed %d – building model", seed)
 
-        # --- Model setup remains the same ---
+        # --- Model setup is correct and does not need changes ---
         model.parameter("a", f"{A}[m]")
         model.parameter("kx", "0")
         model.parameter("ky", "0")
@@ -218,7 +218,6 @@ def _build_and_solve(seed: int):
                 sq.set("pos", [start + j * cell, start + i * cell])
         geom.run()
 
-        # --- Material, Physics, Mesh setup remains the same ---
         soil, concrete = MATERIALS["soil"], MATERIALS["concrete"]
         mat_soil = comp.material().create("mat_soil", "Common")
         pg = mat_soil.propertyGroup("def")
@@ -250,7 +249,6 @@ def _build_and_solve(seed: int):
         mesh.feature().create("ftri1", "FreeTri").selection().geom("geom1", 2).all()
         mesh.run()
 
-        # --- Study setup remains the same ---
         study = model.java.study().create("std1")
         eig = study.create("eig", "Eigenfrequency")
         eig.set("neigsactive", "on")
@@ -259,7 +257,7 @@ def _build_and_solve(seed: int):
         eig.set("shift", "1")
         eig.activate("solid", True)
 
-        # --- Database logging setup remains the same ---
+        # --- Initial database logging is fine ---
         mph_name = f"grid32_seed_{seed}.mph"
         run_id = _log_run_and_get_id(DB_PATH, seed, mph_name)
         atlas_path = f"atlas_run_{run_id}.npy"
@@ -267,7 +265,11 @@ def _build_and_solve(seed: int):
         materials_json = json.dumps(MATERIALS)
         _update_run_with_paths(DB_PATH, run_id, atlas_path, materials_json)
 
-        # Solve for each k-point
+        # ★★★ DATABASE OPTIMIZATION START ★★★
+
+        # 1. Create a list to hold all results for this seed
+        results_for_db_batch = []
+
         k_points = generate_kgrid(N_K, K_MAX)
         for kx, ky in k_points:
             logging.info(f"Seed {seed}, k=({kx:.2f},{ky:.2f}) - Solving...")
@@ -277,54 +279,57 @@ def _build_and_solve(seed: int):
 
             freqs = [float(np.real(v)) for v in model.evaluate("freq")]
 
-            # Create the export node as before
+            # (The data export and conversion part remains unchanged)
             cpt_tag_temp = "temp_cpt_export"
             export_tag_temp = "temp_data_export"
-
-            # (Safety removal of nodes can remain)
             try:
                 model.java.result().dataset().remove(cpt_tag_temp)
                 model.java.result().export().remove(export_tag_temp)
             except Exception:
                 pass
-
             cpt_node = model.java.result().dataset().create(cpt_tag_temp, "CutPoint2D")
             cpt_node.set("method", "grid")
             cpt_node.set("gridx", f"range(-a/2,a/{GRID_SIZE - 1},a/2)")
             cpt_node.set("gridy", f"range(-a/2,a/{GRID_SIZE - 1},a/2)")
             cpt_node.run()
-
             export_node = model.java.result().export().create(export_tag_temp, "Data")
             export_node.set("data", cpt_tag_temp)
-            export_node.setIndex("expr", "u", 0)  # This exports all 10 modes of u
-            export_node.setIndex("expr", "v", 1)  # This exports all 10 modes of v
-
-            # ★★★ CHANGED SECTION START ★★★
-            # Define temp .txt filename, which will be converted and deleted
+            export_node.setIndex("expr", "u", 0)
+            export_node.setIndex("expr", "v", 1)
             txt_filename = f"atlas_{seed}_kx_{kx:.4f}_ky_{ky:.4f}.txt"
             txt_filepath = EXPORT_DATA_DIR / txt_filename
             safe_filepath_str = str(txt_filepath.resolve()).replace('\\', '\\\\')
-
             export_node.set("filename", safe_filepath_str)
             export_node.run()
             logging.info(
                 f"Seed {seed}, k=({kx:.2f},{ky:.2f}) - Exported temp displacements to {txt_filename}")
-
-            # Convert the exported .txt file to a compressed .npz file
             npz_filepath = _convert_txt_to_npz(txt_filepath)
 
-            # Log the final .npz path to the database
-            _log_freqs_and_displacements(DB_PATH, run_id, kx, ky, freqs, str(npz_filepath))
-            # ★★★ CHANGED SECTION END ★★★
+            # 2. Instead of calling the logging function, append results to the list
+            for i, f in enumerate(freqs):
+                results_for_db_batch.append(
+                    (run_id, kx, ky, i + 1, f, str(npz_filepath.resolve()))
+                )
 
-        logging.info("Seed %d finished", seed)
+        # 3. After the loop, write all collected results to the database at once
+        logging.info(f"Seed {seed} finished solving. Writing all results to database...")
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.executemany("""INSERT INTO eigenfrequencies
+                           (run_id, kx, ky, mode_number, frequency_hz, displacement_path)
+                           VALUES (?,?,?,?,?,?)""",
+                        results_for_db_batch)
+        conn.commit()
+        conn.close()
+        logging.info(f"Seed {seed} database write complete.")
+
+        # ★★★ DATABASE OPTIMIZATION END ★★★
 
     except Exception:
         logging.exception("Seed %d failed", seed)
     finally:
         if client:
             client.clear()
-
 
 # ── Main entry point ───────────────────────────────────────────────
 
