@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 recreate_and_validate_model.py  –  validate ω, u, v for one DB row
-Compatible with grid_model.py V5.4.
+Compatible with grid_model.py V5.5.
 Usage
 -----
 python recreate_and_validate_model.py 698
@@ -25,8 +25,8 @@ TOL_DISP_MESH = 1e-12  # when mesh & phase aligned
 TOL_DISP_REBL = 1e-4  # when we had to rebuild
 
 # Point to the correct results directory and database file
-RESULTS_DIR = Path("results_v5.3")
-DB_FILE = RESULTS_DIR / "simulation_results_v5.3.db"
+RESULTS_DIR = Path("results_v5.5")
+DB_FILE = RESULTS_DIR / "simulation_results_v5.5.db"
 MPH_PATTERN = "grid32_seed_{seed}.mph"
 
 SOIL = dict(E=20e6, nu=0.30, rho=1800.0)
@@ -120,7 +120,7 @@ def export_to_npz(model: mph.Model, output_dir: Path, base_name: str) -> Path:
 
     # Create 32x32 grid dataset
     cpt_node = model.java.result().dataset().create(cpt_tag, "CutPoint2D")
-    grid_step = f"a/({GRID_SIZE - 1})"
+    grid_step = f"a/({GRID_SIZE})"
     cpt_node.set("method", "grid")
     cpt_node.set("gridx", f"range(-a/2,{grid_step},a/2)")
     cpt_node.set("gridy", f"range(-a/2,{grid_step},a/2)")
