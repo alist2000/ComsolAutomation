@@ -1,106 +1,13 @@
-from __future__ import annotations
-import logging
-import datetime
-import math
-import multiprocessing as mp
-import sqlite3
-import json
-from pathlib import Path
-from typing import List, Tuple, Optional
-
-import numpy as np
 import mph
+import numpy as np
+import logging
+from pathlib import Path
 
-# ── Global configuration ────────────────────────────────────────────
-A: float = 1.0
-GRID_SIZE: int = 32
-N_K: int = 8
-K_MAX: float = math.pi / A
-N_EIG: int = 10
-N_SEEDS: int = 100
+# --- Configuration ---
+GRID_SIZE = 12
+logging.basicConfig(level=logging.INFO, format="%(asctime)s · %(levelname)s · %(message)s")
 
-# --- Updated output paths ---
-OUTPUT_DIR = Path("results_v5.5_12")
-OUTPUT_DIR.mkdir(exist_ok=True)
-# The dedicated directory for displacement data is no longer needed.
-DB_PATH = OUTPUT_DIR / "simulation_results_v5.5.db"
-
-# --- Material properties ---
-MATERIALS = {
-    "soil": {"youngs_modulus": 20e6, "poissons_ratio": 0.30, "density": 1800.0},
-    "concrete": {"youngs_modulus": 20e9, "poissons_ratio": 0.20, "density": 2400.0},
-}
-
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s · %(levelname)s · %(message)s")
-
-
-# ── DB helpers (Schema is identical, but displacement_path will be NULL) ───
-def _setup_db(db_file: Path) -> None:
-    """Initializes the database with the schema."""
-    conn = sqlite3.connect(db_file)
-    cur = conn.cursor()
-    cur.execute("""CREATE TABLE IF NOT EXISTS simulations (
-                     run_id         INTEGER PRIMARY KEY,
-                     run_timestamp  TEXT,
-                     model_file     TEXT,
-                     seed           INTEGER,
-                     atlas_path     TEXT,
-                     materials_json TEXT)""")
-
-    cur.execute("""CREATE TABLE IF NOT EXISTS eigenfrequencies (
-                     result_id          INTEGER PRIMARY KEY,
-                     run_id             INTEGER,
-                     kx                 REAL,
-                     ky                 REAL,
-                     mode_number        INTEGER,
-                     frequency_hz       REAL,
-                     displacement_path  TEXT)""")
-    conn.commit()
-    conn.close()
-
-
-def _log_run_and_get_id(db_file: Path, seed: int, mph_name: str) -> int:
-    """Logs the initial run info and returns the new run_id."""
-    conn = sqlite3.connect(db_file)
-    cur = conn.cursor()
-    cur.execute("INSERT INTO simulations (run_timestamp, model_file, seed) VALUES (?,?,?)",
-                (datetime.datetime.now().isoformat(timespec="seconds"),
-                 mph_name, seed))
-    run_id = cur.lastrowid
-    conn.commit()
-    conn.close()
-    return run_id
-
-
-def _update_run_with_paths(db_file: Path, run_id: int, atlas_path: str,
-                           materials_json: str):
-    """Updates the run record with atlas and material info."""
-    conn = sqlite3.connect(db_file)
-    cur = conn.cursor()
-    cur.execute("""UPDATE simulations SET atlas_path = ?, materials_json = ?
-                   WHERE run_id = ?""", (atlas_path, materials_json, run_id))
-    conn.commit()
-    conn.close()
-
-
-# The function to log individual frequencies is no longer used by the worker
-# but is kept here for potential separate use or reference.
-def _log_freqs_and_displacements(db_file: Path, run_id: int, kx: float, ky: float,
-                                 freqs: List[float], displacement_path: Optional[str]):
-    """Logs frequencies and an optional path to the displacement file."""
-    conn = sqlite3.connect(db_file)
-    cur = conn.cursor()
-    cur.executemany("""INSERT INTO eigenfrequencies
-                       (run_id, kx, ky, mode_number, frequency_hz, displacement_path)
-                       VALUES (?,?,?,?,?,?)""",
-                    [(run_id, kx, ky, i + 1, f, displacement_path)
-                     for i, f in enumerate(freqs)])
-    conn.commit()
-    conn.close()
-
-
-# ── Util functions ──────────────────────────────────────────────────
+# ── 1. Match "First Code" logic for material map ──────────────────
 def create_symmetric_material_map(size: int, seed: int) -> np.ndarray:
     rng = np.random.default_rng(seed)
     quad = rng.integers(0, 2, size=(size // 2, size // 2))
@@ -108,154 +15,179 @@ def create_symmetric_material_map(size: int, seed: int) -> np.ndarray:
     top = np.hstack((np.fliplr(quad), quad))
     return np.vstack((np.flipud(top), top))
 
+# ── 2. Match "First Code" logic for Boundary IDs ──────────────────
+def _get_boundary_ids() -> tuple:
+    """
+    Returns the lists of Face IDs for boundaries, exactly like 
+    _outer_bnd_lists() in your first code.
+    
+    ACTION REQUIRED: 
+    1. Run this script once. It will save the .mph file but fail to solve.
+    2. Open the .mph file in COMSOL.
+    3. Find the Face IDs for:
+       - Periodic Condition (Front/Back faces)
+       - Low Reflecting Boundary (Left/Right/Bottom faces)
+    4. Update the lists below with those numbers.
+    """
+    
+    # Placeholder IDs - UPDATE THESE AFTER CHECKING GEOMETRY
+    pbc_faces = [1,6,7]          # Front and Back Faces
+    lrb_faces = [2, 3, 4]    # Left, Right, and Bottom Faces
+    
+    return pbc_faces, lrb_faces
 
-def generate_kgrid(n_k: int, k_max: float) -> List[Tuple[float, float]]:
-    lin = np.linspace(0.0, k_max, n_k)
-    return [(float(kx), float(ky)) for i, kx in enumerate(lin) for ky in lin[: i + 1]]
-
-
-def _outer_bnd_lists(size: int) -> Tuple[List[int], List[int]]:
-    if size == 32:
-        pbc_x_nodes_32 = [
-            1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31, 33, 35, 37, 39, 41, 43, 45, 47, 49, 51, 53, 55,
-            57, 59, 61, 63, *range(2081, 2113)
-        ]
-        pbc_y_nodes_32 = [
-            2, 65, 67, 130, 132, 195, 197, 260, 262, 325, 327, 390, 392, 455, 457, 520, 522, 585, 587, 650, 652, 715,
-            717, 780, 782, 845, 847, 910, 912, 975, 977, 1040, 1042, 1105, 1107, 1170, 1172, 1235, 1237, 1300, 1302,
-            1365, 1367, 1430, 1432, 1495, 1497, 1560, 1562, 1625, 1627, 1690, 1692, 1755, 1757, 1820, 1822, 1885, 1887,
-            1950, 1952, 2015, 2017, 2080
-        ]
-        return pbc_x_nodes_32, pbc_y_nodes_32
-    raise ValueError(f"Boundary lists not calibrated for GRID_SIZE = {size}.")
-
-
-# The _convert_txt_to_npz function is no longer needed.
-
-# ── Worker function (UPDATED) ─────────────────────────────────────
-
-def _build_and_solve(seed: int):
-    client = None
+# ── 3. Main Build Function ────────────────────────────────────────
+def build_model_exact_method(
+    seed: int,
+    a: float,
+    h_pile: float,
+    h_model: float,
+    num_piles: int,
+    dist_gap: float,
+    len_plane: float,
+    total_len_x: float,
+    materials: dict,
+    freq_range: str = "range(0, 5, 150)"
+):
+    client = mph.start()
     try:
-        client = mph.start(cores=1)
-        model = client.create(f"GridModel_seed{seed}")
-        logging.info("Seed %d – building model", seed)
+        model_name = f"Grid3D_Seed{seed}_ManualMethod"
+        model = client.create(model_name)
+        logging.info(f"Building {model_name}...")
 
-        # --- Model setup is correct and does not need changes ---
-        model.parameter("a", f"{A}[m]")
-        model.parameter("kx", "0")
-        model.parameter("ky", "0")
+        # Setup Parameters
+        model.parameter("ky", "0[1/m]") 
 
         comp = model.java.component().create("comp1", True)
-        geom = comp.geom().create("geom1", 2)
-        cell = A / GRID_SIZE
-        start = -A / 2
-        for i in range(GRID_SIZE):
-            for j in range(GRID_SIZE):
-                sq = geom.create(f"sq_{i}_{j}", "Square")
-                sq.set("size", cell)
-                sq.set("pos", [start + j * cell, start + i * cell])
-        geom.run()
-
-        soil, concrete = MATERIALS["soil"], MATERIALS["concrete"]
-        mat_soil = comp.material().create("mat_soil", "Common")
-        pg = mat_soil.propertyGroup("def")
-        pg.set("youngsmodulus", f"{soil['youngs_modulus']}[Pa]")
-        pg.set("poissonsratio", str(soil['poissons_ratio']))
-        pg.set("density", f"{soil['density']}[kg/m^3]")
-        mat_con = comp.material().create("mat_con", "Common")
-        pgc = mat_con.propertyGroup("def")
-        pgc.set("youngsmodulus", f"{concrete['youngs_modulus']}[Pa]")
-        pgc.set("poissonsratio", str(concrete['poissons_ratio']))
-        pgc.set("density", f"{concrete['density']}[kg/m^3]")
+        geom = comp.geom().create("geom1", 3)
+        
+        # --- Geometry Generation ---
+        h_bottom = h_model - h_pile
+        
+        # 1. Bottom Soil
+        blk_bot = geom.create("blk_bottom", "Block")
+        blk_bot.set("size", [total_len_x, a, h_bottom])
+        blk_bot.set("pos", [0, 0, 0])
+        
+        # 2. Grid Generation
         mmap = create_symmetric_material_map(GRID_SIZE, seed)
-        mmap_flat = mmap.flatten()
-        dom_ids = np.arange(1, GRID_SIZE * GRID_SIZE + 1)
-        mat_soil.selection().set(tuple(dom_ids[mmap_flat == 0]))
-        mat_con.selection().set(tuple(dom_ids[mmap_flat == 1]))
+        cell_dim = a / GRID_SIZE
+        len_piles = num_piles * a
+        
+        # Top Remainder (Soil after piles)
+        rem_len = total_len_x - len_piles
+        if rem_len > 0:
+            blk_rem = geom.create("blk_top_remainder", "Block")
+            blk_rem.set("size", [rem_len, a, h_pile])
+            blk_rem.set("pos", [len_piles, 0, h_bottom])
+
+        # Track IDs for Materials (standard loop)
+        soil_ids = [1]
+        current_id = 2
+        if rem_len > 0:
+            soil_ids.append(2)
+            current_id = 3
+        conc_ids = []
+
+        for n in range(num_piles):
+            x_offset = n * a
+            for i in range(GRID_SIZE):
+                for j in range(GRID_SIZE):
+                    y_pos = i * cell_dim
+                    x_pos = x_offset + (j * cell_dim)
+                    
+                    blk = geom.create(f"c_{n}_{i}_{j}", "Block")
+                    blk.set("size", [cell_dim, cell_dim, h_pile])
+                    blk.set("pos", [x_pos, y_pos, h_bottom])
+                    
+                    if mmap[i, j] == 1:
+                        conc_ids.append(current_id)
+                    else:
+                        soil_ids.append(current_id)
+                    current_id += 1
+
+        # 3. Output Plane (Work Plane)
+        wp = geom.create("wp1", "WorkPlane")
+        wp.set("planetype", "quick")
+        wp.set("quickplane", "zx")
+        wp.set("quicky", str(a / 2))
+        
+        rect = wp.geom().create("r1", "Rectangle")
+        plane_x_start = len_piles + dist_gap
+        rect.set("pos", [plane_x_start, h_bottom]) 
+        rect.set("size", [len_plane, h_pile])
+
+        geom.run()
+        logging.info("Geometry built.")
+
+        # --- Materials (Standard Selection) ---
+        soil_mat = comp.material().create("mat_soil", "Common")
+        conc_mat = comp.material().create("mat_concrete", "Common")
+        
+        for mat_obj, key in [(soil_mat, "soil"), (conc_mat, "concrete")]:
+            pg = mat_obj.propertyGroup("def")
+            pg.set("youngsmodulus", f"{materials[key]['youngs_modulus']}[Pa]")
+            pg.set("poissonsratio", str(materials[key]['poissons_ratio']))
+            pg.set("density", f"{materials[key]['density']}[kg/m^3]")
+
+        soil_mat.selection().set(soil_ids)
+        conc_mat.selection().set(conc_ids)
+
+        # --- Physics (Using "First Code" Method) ---
         solid = comp.physics().create("solid", "SolidMechanics", "geom1")
-        pbc_x_nodes, pbc_y_nodes = _outer_bnd_lists(GRID_SIZE)
-        pbc_x = solid.create("pbc_x", "PeriodicCondition", 1)
-        pbc_x.selection().set(pbc_x_nodes)
-        pbc_x.set("PeriodicType", "Floquet")
-        pbc_x.set("kFloquet", ["kx", "0", "0"])
-        pbc_y = solid.create("pbc_y", "PeriodicCondition", 1)
-        pbc_y.selection().set(pbc_y_nodes)
-        pbc_y.set("PeriodicType", "Floquet")
-        pbc_y.set("kFloquet", ["0", "ky", "0"])
+        
+        # 1. Get IDs from function (User defined)
+        pbc_faces, lrb_faces = _get_boundary_ids()
+        
+        # 2. Set Low Reflecting Boundary
+        lrb = solid.create("lrb1", "LowReflectingBoundary", 2)
+        # Using exact method from first code: .selection().set(list)
+        lrb.selection().set(lrb_faces)
+        
+        # 3. Set Periodic Condition
+        pbc = solid.create("pbc1", "PeriodicCondition", 2)
+        # Using exact method from first code: .selection().set(list)
+        pbc.selection().set(pbc_faces)
+        pbc.set("PeriodicType", "Floquet")
+        pbc.set("kFloquet", ["0", "ky", "0"])
+
+        # --- Mesh & Study ---
         mesh = comp.mesh().create("mesh1", "geom1")
-        mesh.autoMeshSize(5)
-        mesh.feature().create("ftri1", "FreeTri").selection().geom("geom1", 2).all()
+        mesh.autoMeshSize(6) 
         mesh.run()
 
         study = model.java.study().create("std1")
-        eig = study.create("eig", "Eigenfrequency")
-        eig.set("neigsactive", "on")
-        eig.set("neigs", str(N_EIG))
-        eig.set("shiftactive", "on")
-        eig.set("shift", "1")
-        eig.activate("solid", True)
+        freq = study.create("freq", "Frequency")
+        freq.set("plist", freq_range)
+        
+        output_file = Path(f"{model_name}.mph").absolute()
+        model.save(str(output_file))
+        logging.info(f"Model saved to {output_file}")
+        
+        logging.info("Solving...")
+        study.run()
+        logging.info("Done.")
 
-        # --- Initial database logging is fine ---
-        mph_name = f"grid32_seed_{seed}.mph"
-        run_id = _log_run_and_get_id(DB_PATH, seed, mph_name)
-        atlas_path = f"atlas_run_{run_id}.npy"
-        np.save(OUTPUT_DIR / atlas_path, mmap)
-        materials_json = json.dumps(MATERIALS)
-        _update_run_with_paths(DB_PATH, run_id, atlas_path, materials_json)
-
-        # --- DATABASE OPTIMIZATION & MODIFIED LOGIC ---
-
-        # 1. Create a list to hold all results for this seed
-        results_for_db_batch = []
-
-        k_points = generate_kgrid(N_K, K_MAX)
-        for kx, ky in k_points:
-            logging.info(f"Seed {seed}, k=({kx:.2f},{ky:.2f}) - Solving...")
-            model.parameter("kx", str(kx))
-            model.parameter("ky", str(ky))
-            study.run()
-
-            freqs = [float(np.real(v)) for v in model.evaluate("freq")]
-
-            # --- REMOVED DISPLACEMENT EXPORT AND CONVERSION ---
-            # The entire block for exporting displacement data to a text file
-            # and converting it to .npz has been removed.
-
-            # 2. Append results to the list with None for the displacement path
-            for i, f in enumerate(freqs):
-                results_for_db_batch.append(
-                    (run_id, kx, ky, i + 1, f, None)  # Pass None for path
-                )
-
-        # 3. After the loop, write all collected results to the database at once
-        logging.info(f"Seed {seed} finished solving. Writing all results to database...")
-        conn = sqlite3.connect(DB_PATH)
-        cur = conn.cursor()
-        cur.executemany("""INSERT INTO eigenfrequencies
-                           (run_id, kx, ky, mode_number, frequency_hz, displacement_path)
-                           VALUES (?,?,?,?,?,?)""",
-                        results_for_db_batch)
-        conn.commit()
-        conn.close()
-        logging.info(f"Seed {seed} database write complete.")
-
-    except Exception:
-        logging.exception("Seed %d failed", seed)
+    except Exception as e:
+        logging.error(f"Execution failed: {e}")
+        logging.info("REMINDER: Check your _get_boundary_ids() list matches the geometry IDs.")
     finally:
-        if client:
-            client.clear()
-
-
-# ── Main entry point ───────────────────────────────────────────────
+        client.clear()
 
 if __name__ == "__main__":
-    _setup_db(DB_PATH)
-
-    logging.info("Launching %d parallel workers…", N_SEEDS)
-    seeds_to_run = range(21300, N_SEEDS + 21300)
-    with mp.Pool(processes=min(6, N_SEEDS)) as pool:
-        pool.map(_build_and_solve, seeds_to_run)
-        pool.close()
-        pool.join()
-    logging.info("All workers finished.")
+    MATS = {
+        "soil": {"youngs_modulus": 20e6, "poissons_ratio": 0.30, "density": 1800.0},
+        "concrete": {"youngs_modulus": 20e9, "poissons_ratio": 0.20, "density": 2400.0},
+    }
+    
+    build_model_exact_method(
+        seed=42,
+        a=1.0,
+        h_pile=5.0,
+        h_model=15.0,
+        num_piles=3,
+        dist_gap=2.0,
+        len_plane=1.0,
+        total_len_x=10.0,
+        materials=MATS
+    )
