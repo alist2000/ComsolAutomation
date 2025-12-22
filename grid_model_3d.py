@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 
 # --- Configuration ---
-GRID_SIZE = 12
+GRID_SIZE = 32
 logging.basicConfig(level=logging.INFO, format="%(asctime)s · %(levelname)s · %(message)s")
 
 # ── 1. Match "First Code" logic for material map ──────────────────
@@ -47,7 +47,7 @@ def build_model_exact_method(
     len_plane: float,
     total_len_x: float,
     materials: dict,
-    freq_range: str = "range(0, 5, 150)"
+    freq_range: str = "range(0, 5, 10)"
 ):
     client = mph.start()
     try:
@@ -114,8 +114,8 @@ def build_model_exact_method(
         
         rect = wp.geom().create("r1", "Rectangle")
         plane_x_start = len_piles + dist_gap
-        rect.set("pos", [plane_x_start, h_bottom]) 
-        rect.set("size", [len_plane, h_pile])
+        rect.set("pos", [h_bottom, plane_x_start]) 
+        rect.set("size", [h_pile, len_plane])
 
         geom.run()
         logging.info("Geometry built.")
@@ -184,10 +184,10 @@ if __name__ == "__main__":
         seed=42,
         a=1.0,
         h_pile=5.0,
-        h_model=15.0,
-        num_piles=3,
-        dist_gap=2.0,
-        len_plane=1.0,
-        total_len_x=10.0,
+        h_model=8.5,
+        num_piles=10,
+        dist_gap=1.5,
+        len_plane=1.5,
+        total_len_x=13.5,
         materials=MATS
     )
