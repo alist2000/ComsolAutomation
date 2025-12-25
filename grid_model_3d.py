@@ -107,30 +107,33 @@ def build_model_exact_method(
         
         geom.run()
         logging.info("Geometry construction complete.")
-        # # Track IDs for Materials (standard loop)
-        soil_ids = [1]
-        current_id = 2
-        if rem_len > 0:
-            soil_ids.append(2)
-            current_id = 3
-        conc_ids = []
 
-        # for n in range(num_piles):
-        #     x_offset = n * a
-        #     for i in range(GRID_SIZE):
-        #         for j in range(GRID_SIZE):
-        #             y_pos = i * cell_dim
-        #             x_pos = x_offset + (j * cell_dim)
-                    
-        #             blk = geom.create(f"c_{n}_{i}_{j}", "Block")
-        #             blk.set("size", [cell_dim, cell_dim, h_pile])
-        #             blk.set("pos", [x_pos, y_pos, h_bottom])
-                    
-        #             if mmap[i, j] == 1:
-        #                 conc_ids.append(current_id)
-        #             else:
-        #                 soil_ids.append(current_id)
-        #             current_id += 1
+        # --- Assign Materials to Grids ---
+        soil_ids = []
+        conc_ids = []
+        current_id = 1
+
+        # 1. Bottom Soil
+        soil_ids.append(current_id)
+        current_id += 1
+
+        # 2. Remainder (if exists)
+        if rem_len > 0:
+            soil_ids.append(current_id)
+            current_id += 1
+
+        # 3. Piles (Array of Unit Cells)
+        # Iterate through each pile copy
+        for n in range(num_piles):
+            # Inside unit cell: COMSOL layers usually index x-fastest, then y.
+            # mmap[i, j] -> i is row (y), j is col (x)
+            for i in range(GRID_SIZE):
+                for j in range(GRID_SIZE):
+                    if mmap[i, j] == 1:
+                        conc_ids.append(current_id)
+                    else:
+                        soil_ids.append(current_id)
+                    current_id += 1
 
         # 3. Output Plane (Work Plane)
         wp = geom.create("wp1", "WorkPlane")
